@@ -17,17 +17,17 @@
     "localhost-server",
     "websocket"
   ],
-  "homepage": "https://github.com/qq458249269/pi-dsh-pet#readme",
+  "homepage": "https://github.com/BeYourDreams/pi-dsh-pet#readme",
   "author": {
     "name": "yinxuehao",
     "url": "https://github.com/qq458249269"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/qq458249269/pi-dsh-pet.git"
+    "url": "git+https://github.com/BeYourDreams/pi-dsh-pet.git"
   },
   "bugs": {
-    "url": "https://github.com/qq458249269/pi-dsh-pet/issues"
+    "url": "https://github.com/BeYourDreams/pi-dsh-pet/issues"
   },
   "type": "module",
   "main": "app/electron.cjs",

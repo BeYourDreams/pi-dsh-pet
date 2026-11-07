@@ -45,7 +45,7 @@ const { spawn } = require("node:child_process");
 
 const PKG_ROOT = path.resolve(__dirname, "..");
 /** portable 那一档问的仓库（跟 package.json 的 repository 同一家，不另配） */
-const REPO = "qq458249269/pi-dsh-pet";
+const REPO = "BeYourDreams/pi-dsh-pet";
 
 const NPM = process.platform === "win32" ? "npm.cmd" : "npm";
 
