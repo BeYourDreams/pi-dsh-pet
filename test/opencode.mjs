@@ -1,9 +1,10 @@
 /**
- * opencode 侧适配的集成测试：用假 PluginInput 驱动 opencode/pi-pet.ts，看状态有没有真的
- * 变成 思考中 / 执行中 / 空闲，以及 pet 工具的 say/status 走不走得通。
+ * opencode 侧适配的集成测试：用假 PluginContext 驱动 opencode/pi-pet.ts 的 **V2** 入口
+ * （`{ id, setup }`），看状态有没有真的变成 思考中 / 执行中 / 空闲，以及 pet 工具的
+ * say/status 走不走得通。顺带确认 V1 的 `server()` 出口还在。
  * 跑：npm run test:opencode
  */
-console.log("pi-dsh-pet opencode 适配测试\n");
+console.log("pi-dsh-pet opencode 适配测试（V2 plugin API）\n");
 import { spawn } from "node:child_process";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,32 +38,74 @@ const frames = [];
 win.addEventListener("message", (e) => frames.push(String(e.data)));
 await new Promise((r) => win.addEventListener("open", r));
 
+// ---- 假 V2 插件 context：事件流 + tool transform ----
+const queue = [];
+let waiter = null;
+const push = (event) => {
+  queue.push(event);
+  if (waiter) {
+    const wake = waiter;
+    waiter = null;
+    wake();
+  }
+};
+async function* eventStream({ signal } = {}) {
+  while (!signal?.aborted) {
+    if (queue.length) {
+      yield queue.shift();
+      continue;
+    }
+    await new Promise((resolve) => {
+      waiter = resolve;
+      signal?.addEventListener("abort", resolve, { once: true });
+    });
+  }
+}
+
+let petTool = null;
+const ctx = {
+  location: { directory: ROOT, project: { id: "test", directory: ROOT, canonical: ROOT } },
+  app: { version: "2.2.5" },
+  options: {},
+  event: { subscribe: (opts) => eventStream(opts) },
+  tool: {
+    transform: async (callback) => {
+      const tools = new Map();
+      callback({ add: (tool) => tools.set(tool.name, tool) });
+      petTool = tools.get("pet");
+      return { dispose: async () => {} };
+    },
+  },
+};
+
 const { default: plugin } = await import("../opencode/pi-pet.ts");
-const hooks = await plugin({
-  project: { id: "test", worktree: ROOT },
-  directory: ROOT,
-  worktree: ROOT,
-  client: { app: { log: async () => {} } },
-});
+const cleanup = await plugin.setup(ctx);
 await sleep(300);
 
-const fire = (event) => hooks.event({ event });
-const MESSAGE = { id: "msg_1", role: "assistant", sessionID: "ses_1", time: { created: Date.now() } };
+const fire = (event) => push(event);
+const SESSION = "ses_1";
+const MESSAGE = "msg_1";
 
-await fire({ type: "message.updated", properties: { info: MESSAGE } });
-await sleep(200);
-// 同一条消息 opencode 会反复推 message.updated：只该播一次「思考中」
-await fire({ type: "message.updated", properties: { info: MESSAGE } });
+// V2 的事件是 { id, created, type, data }，data 才带业务字段
+await fire({ type: "session.created", data: { sessionID: SESSION, title: "第一版", location: { directory: ROOT } } });
+await fire({ type: "session.renamed", data: { sessionID: SESSION, title: "摸鱼工程" } });
+await fire({ type: "session.execution.started", data: { sessionID: SESSION } });
 await sleep(150);
+// 工具名只在 input.started 里；called 只有参数
+await fire({ type: "session.tool.input.started", data: { sessionID: SESSION, assistantMessageID: MESSAGE, id: "tool_1", name: "bash" } });
 await fire({
-  type: "message.part.updated",
-  properties: { part: { id: "prt_1", type: "tool", tool: "bash", state: { status: "running", input: { command: "npm test" } } } },
+  type: "session.tool.called",
+  data: { sessionID: SESSION, assistantMessageID: MESSAGE, id: "tool_1", input: { command: "npm test" }, executed: true },
 });
 await sleep(200);
-await fire({ type: "session.idle", properties: { sessionID: "ses_1" } });
+await fire({
+  type: "session.tool.success",
+  data: { sessionID: SESSION, assistantMessageID: MESSAGE, id: "tool_1", content: [{ type: "text", text: "ok" }], executed: true },
+});
+await fire({ type: "session.idle", data: { sessionID: SESSION } });
 await sleep(200);
 
-const tool = (command) => hooks.tool.pet.execute({ command }, { agent: "build", sessionID: "ses_1" });
+const tool = (command) => petTool.execute({ command });
 const sayOut = await tool("say 你今天摸鱼了吗");
 await sleep(200);
 const statusOut = await tool("status");
@@ -84,18 +127,20 @@ const ok = (name, cond, extra = "") => {
   else { failed++; console.log("  ✗ " + name + (extra ? " — " + extra : "")); }
 };
 
-ok("thinking → 思考中", anim[0] === "thinking", JSON.stringify(anim));
-ok("同一消息重复更新只播一次", anim.filter((f) => f === "thinking").length === 1, JSON.stringify(anim));
-ok("tool running → 执行中 + detail", anim[1] === '{"type":"tool_call","tool":"bash"}' && bubbles.includes("执行中：npm test"), JSON.stringify(anim) + " " + JSON.stringify(bubbles));
+ok("V2 默认导出带 id / setup", plugin.id === "pi-dsh-pet" && typeof plugin.setup === "function", String(plugin.id));
+ok("V1 兼容出口 server() 还在", typeof plugin.server === "function");
+ok("session.execution.started → 思考中", anim[0] === "thinking", JSON.stringify(anim));
+ok("tool called → 执行中 + 工具名 + detail", anim[1] === '{"type":"tool_call","tool":"bash"}' && bubbles.includes("执行中：npm test"), JSON.stringify(anim) + " " + JSON.stringify(bubbles));
 ok("session.idle → 回空闲", anim[2] === "agent_idle", JSON.stringify(anim));
-ok("pet 工具 say → 气泡", bubbles.includes("你今天摸鱼了吗") && String(sayOut).includes("已说话"), JSON.stringify(bubbles));
-ok("pet 工具 status 报出端口", String(statusOut).includes(`:${PORT}`), String(statusOut));
-ok("pet 工具认得非法命令", String(badOut).includes("用法"), String(badOut));
+ok("session.renamed → 气泡标题跟着换", sessions.some((s) => s.title === "摸鱼工程"), JSON.stringify(sessions));
+ok("pet 工具 say → 气泡", bubbles.includes("你今天摸鱼了吗") && String(sayOut.content).includes("已说话"), JSON.stringify(bubbles));
+ok("pet 工具 status 报出端口", String(statusOut.content).includes(`:${PORT}`), String(statusOut.content));
+ok("pet 工具认得非法命令", String(badOut.content).includes("用法"), String(badOut.content));
 ok("会话名存在 /state 里", st.bus.feedsBySource["opencode"] === 1, JSON.stringify(st.bus));
 // v1.4：这个会话自己一条气泡（执行中 → 已完成，sid 前后不变 = 原地换）
-ok("每会话一条气泡（sid 不变，状态变）", sessions.length >= 3 && sessions.every((s) => s.sid === sessions[0].sid) && sessions[0].status === "running" && sessions[sessions.length - 1].status === "done", JSON.stringify(sessions));
+ok("每会话一条气泡（sid 不变，状态变）", sessions.length >= 2 && sessions.every((s) => s.sid === sessions[0].sid) && sessions[sessions.length - 1].status === "done", JSON.stringify(sessions));
 
-hooks.dispose();
+cleanup?.();
 await fetch(`http://127.0.0.1:${PORT}/control`, {
   method: "POST",
   headers: { "content-type": "application/json", authorization: `Bearer ${token}` },

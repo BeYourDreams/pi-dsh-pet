@@ -48,6 +48,12 @@ pi-pet start          # 起桌宠（自带服务 + 窗）
 node -e "require('fs').copyFileSync('node_modules/pi-dsh-pet/opencode/pi-pet.ts', require('os').homedir()+'/.config/opencode/plugins/pi-pet.ts')"
 ```
 
+> 💡 opencode **2.x** 换了插件 API：V1 的 `export default async function` 在 V2 里根本不会加载
+> （日志会写 `Plugin must export a default definition with an id and an effect or setup function`）。
+> 本文件同时提供两个入口 —— V2 用 `{ id, setup }`（`ctx.tool.transform` + `ctx.event.subscribe`），
+> V1（1.18.29+）走 `server()` —— 一份文件两代都能跑。装完用 `opencode plugin list`
+> 确认 ID 是 `pi-dsh-pet` 而不是 `-`。
+
 opencode 没有客户端 `/pet` 这类斜杠命令注册（命令是 markdown 模板，每按一次都烧一次模型调用），
 所以控制面是一个 `pet` 工具，让 agent 自己调：让它 `show` / `show large` / `hide` /
 `say 你今天摸鱼了吗` / `status`；直接跟它说「把桌宠藏起来」也行。
@@ -179,7 +185,7 @@ pi-dsh-pet/
 ├── bin/pi-pet.cjs      # 命令行入口（pi-pet = dsh-pet）
 ├── pi/extensions/      # pi 侧薄客户端（自动起宿主、事件 → 状态帧）
 ├── dsh/pi-pet.mjs      # dsh 侧适配（cordis 风格）
-├── opencode/pi-pet.ts  # opencode 侧适配（Bun 插件 + pet 工具）
+├── opencode/pi-pet.ts  # opencode 1/2 插件（V2 setup() + V1 server()）
 ├── pi/assets/          # Electron 窗口 UI（pet.html + pet.js + pet.css + preload + 主进程）
 assets/preview/     # 93 个预览 GIF
 assets/thumb/       # 93 个透明 WebM 动画
